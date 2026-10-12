@@ -1,0 +1,38 @@
+{
+  "name": "cyclo-ia",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "db:setup": "node scripts/migrate-integrate.js",
+    "db:pipeline": "node scripts/migrate-pipeline.js"
+  },
+  "dependencies": {
+    "@google/genai": "^2.22.0",
+    "@supabase/supabase-js": "^2.57.4",
+    "docx": "^9.10.0",
+    "ffmpeg-static": "^5.2.0",
+    "next": "16.3.5",
+    "openai": "^4.104.0",
+    "pdfkit": "^0.20.2",
+    "pg": "^8.16.3",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/pdfkit": "^0.17.6",
+    "@types/pg": "^8.15.5",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.5",
+    "sharp": "^0.34.2",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}
