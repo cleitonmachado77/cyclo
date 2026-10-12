@@ -3,6 +3,7 @@ import PDFDocument from "pdfkit";
 import { renderChart, type ChartImage } from "@/lib/report-chart";
 import { tintColor } from "@/lib/report-layout";
 import { qualitativeIsEmpty } from "@/lib/report-qualitative";
+import { STAGE_SECTION } from "@/lib/report-stages";
 import type { ReportView } from "@/lib/report-view";
 
 const FONT = existsSync("C:/Windows/Fonts/arial.ttf") ? "C:/Windows/Fonts/arial.ttf" : "Helvetica";
@@ -23,7 +24,12 @@ export async function renderReportPdf(view: ReportView) {
   writeCover(doc, view);
   if (view.includeKpis) writeKpis(doc, view);
   for (const chart of charts) writeChart(doc, chart.image, chart.caption);
-  if (view.includeDetail) for (const video of view.videos) writeVideo(doc, video, view.accent);
+  if (view.includeDetail && view.videos.length) {
+    ensure(doc, 36);
+    doc.moveDown(0.8);
+    sectionTitle(doc, STAGE_SECTION, view.accent);
+    for (const video of view.videos) writeVideo(doc, video, view.accent);
+  }
   if (view.failures.length) writeFailures(doc, view);
   writePageNumbers(doc);
 
@@ -118,35 +124,23 @@ function writeChart(doc: PDFKit.PDFDocument, chart: ChartImage | null, caption: 
 }
 
 function writeVideo(doc: PDFKit.PDFDocument, video: ReportView["videos"][number], accent: string) {
-  ensure(doc, 90);
-  doc.moveDown(0.8);
-  sectionTitle(doc, video.fileName, accent);
-  doc.font(FONT).fontSize(10).fillColor("#334155").text(`Tempo dos elementos: ${video.total}`);
-  if (video.observations) {
-    doc.moveDown(0.2);
-    doc.text(video.observations, { lineGap: 1 });
-  }
+  ensure(doc, 72);
+  doc.moveDown(0.55);
+  sectionTitle(doc, video.stageTitle, accent);
+  if (video.observations) doc.font(FONT).fontSize(10).fillColor("#334155").text(video.observations, { lineGap: 1 });
   if (!video.rows.length) {
     doc.moveDown(0.3);
-    doc.text("Nenhum movimento medido.");
+    doc.font(FONT).fontSize(10).fillColor("#334155").text("Nenhum movimento medido.");
     return;
   }
-  doc.moveDown(0.4);
-  for (const row of video.rows) writeMovement(doc, row, accent);
+  doc.moveDown(0.3);
+  for (const row of video.rows) writeMovement(doc, row);
 }
 
-function writeMovement(doc: PDFKit.PDFDocument, row: ReportView["videos"][number]["rows"][number], accent: string) {
-  ensure(doc, 42);
-  const y = doc.y;
-  doc.save();
-  doc.strokeColor("#e2e8f0").lineWidth(0.6).moveTo(doc.page.margins.left, y).lineTo(doc.page.width - doc.page.margins.right, y).stroke();
-  doc.restore();
-  doc.y = y + 6;
-  const line = `${row.start}–${row.end}  ·  ${row.duration}  ·  ${row.status}`;
-  doc.fillColor("#0f172a").font(FONT_BOLD).fontSize(10).text(row.name);
-  doc.fillColor(accent).font(FONT).fontSize(9).text(line);
-  if (row.notes) doc.fillColor("#475569").text(row.notes, { lineGap: 1 });
-  doc.moveDown(0.35);
+function writeMovement(doc: PDFKit.PDFDocument, row: ReportView["videos"][number]["rows"][number]) {
+  ensure(doc, 32);
+  doc.fillColor("#1f2933").font(FONT).fontSize(10).text(`${row.measure}. ${row.line}`, { lineGap: 1 });
+  doc.moveDown(0.2);
 }
 
 function writeFailures(doc: PDFKit.PDFDocument, view: ReportView) {

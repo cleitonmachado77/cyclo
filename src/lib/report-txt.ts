@@ -1,6 +1,6 @@
 import { formatSeconds } from "@/lib/format";
 import { buildQualitative, qualitativeIsEmpty } from "@/lib/report-qualitative";
-import type { MovementTiming } from "@/types/activity";
+import { STAGE_SECTION, measureText, stageHeading } from "@/lib/report-stages";
 import type { ConsolidatedReport, RunStatus } from "@/types/pipeline";
 
 const STATUS_LABEL: Record<RunStatus, string> = {
@@ -71,21 +71,19 @@ export function renderReportTxt(input: {
     }
   }
 
-  for (const video of report.videos) {
-    blocks.push(
-      "",
-      `Vídeo: ${video.fileName}`,
-      `Tempo total: ${formatSeconds(video.totalDurationSeconds)}`,
-    );
-    if (video.observations) blocks.push(`Observações: ${video.observations}`);
-    if (!video.movements.length) {
-      blocks.push("Nenhum movimento medido.");
-      continue;
-    }
-    blocks.push("");
-    for (const movement of video.movements) {
-      blocks.push(formatMovement(movement));
-    }
+  if (report.videos.length) {
+    blocks.push("", STAGE_SECTION);
+    report.videos.forEach((video, stage) => {
+      blocks.push("", stageHeading(stage + 1, video.fileName, video.totalDurationSeconds));
+      if (video.observations) blocks.push(`Observações: ${video.observations}`);
+      if (!video.movements.length) {
+        blocks.push("Nenhum movimento medido.");
+        return;
+      }
+      video.movements.forEach((movement, index) => {
+        blocks.push(`${index + 1}. ${measureText(movement)}`);
+      });
+    });
   }
 
   if (report.itemErrors?.length) {
@@ -102,24 +100,6 @@ export function renderReportTxt(input: {
 function qualitativeLines(title: string, items: string[]) {
   if (!items.length) return [];
   return ["", title, ...items.map((item) => `- ${item}`)];
-}
-
-function formatMovement(movement: MovementTiming) {
-  const notes = movement.notes ? `\n  Notas: ${movement.notes}` : "";
-  return [
-    movement.name,
-    `  Status: ${movementStatus(movement.status)}`,
-    `  Início: ${movement.startTime}`,
-    `  Fim: ${movement.endTime}`,
-    `  Duração: ${formatSeconds(movement.durationSeconds)}${notes}`,
-  ].join("\n");
-}
-
-function movementStatus(status?: MovementTiming["status"]) {
-  if (status === "complete") return "Completo";
-  if (status === "partial") return "Parcial";
-  if (status === "not_found") return "Não encontrado";
-  return "—";
 }
 
 export function formatReportDate(value: string) {

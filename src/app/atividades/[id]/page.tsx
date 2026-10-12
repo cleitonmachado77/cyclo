@@ -7,8 +7,9 @@ import { ActivityReports } from "@/components/ActivityReports";
 import { AppShell } from "@/components/AppShell";
 import { AnalysisMonitor, applyAnalysisProgress, startMonitor, type AnalysisMonitorState } from "@/components/AnalysisMonitor";
 import { StatusBadge } from "@/components/StatusBadge";
-import { formatBytes, formatDate, formatSeconds } from "@/lib/format";
+import { formatBytes, formatDate } from "@/lib/format";
 import { QualitativeNotes } from "@/components/QualitativeNotes";
+import { StageMeasures } from "@/components/StageMeasures";
 import { toUserMessage } from "@/lib/errors";
 import { readSse } from "@/lib/read-sse";
 import { uploadWithProgress } from "@/lib/upload";
@@ -552,54 +553,7 @@ export default function ActivityDetailPage({
               </div>
 
               <QualitativeNotes videos={activity.analysis.videos} />
-
-              {activity.analysis.videos.map((video) => (
-                <div key={video.videoId} className="video-item">
-                  <div className="video-meta">
-                    <div>
-                      <strong>{video.fileName}</strong>
-                      <div className="muted" style={{ marginTop: 4 }}>
-                        Tempo total: {formatSeconds(video.totalDurationSeconds)}
-                      </div>
-                    </div>
-                  </div>
-
-                  {video.observations && <p className="muted">{video.observations}</p>}
-
-                  <table className="result-table">
-                    <thead>
-                      <tr>
-                        <th>Movimento</th>
-                        <th>Status</th>
-                        <th>Início</th>
-                        <th>Fim</th>
-                        <th>Duração</th>
-                        <th>Notas</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {video.movements.map((movement, index) => (
-                        <tr key={`${video.videoId}-${index}`}>
-                          <td>{movement.name}</td>
-                          <td>
-                            {movement.status === "complete"
-                              ? "Completo"
-                              : movement.status === "partial"
-                                ? "Parcial"
-                                : movement.status === "not_found"
-                                  ? "Não encontrado"
-                                  : "—"}
-                          </td>
-                          <td>{movement.startTime}</td>
-                          <td>{movement.endTime}</td>
-                          <td>{formatSeconds(movement.durationSeconds)}</td>
-                          <td>{movement.notes || "—"}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ))}
+              <StageMeasures videos={activity.analysis.videos} />
             </div>
           )}
           <ActivityReports

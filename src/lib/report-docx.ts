@@ -13,6 +13,7 @@ import {
 import { renderChart, type ChartImage } from "@/lib/report-chart";
 import { tintColor } from "@/lib/report-layout";
 import { qualitativeIsEmpty } from "@/lib/report-qualitative";
+import { STAGE_SECTION } from "@/lib/report-stages";
 import type { ReportChart, ReportView } from "@/lib/report-view";
 
 export async function renderReportDocx(view: ReportView) {
@@ -34,7 +35,7 @@ export async function renderReportDocx(view: ReportView) {
     ...(view.warning ? [text(`Aviso: ${view.warning}`, "9A3412")] : []),
     ...(view.includeKpis ? [heading("Indicadores", HeadingLevel.HEADING_2, accent), kpiTable(view, accent)] : []),
     ...charts.flatMap((item) => chartBlock(item.image, item.chart.title, item.chart.caption, accent)),
-    ...(view.includeDetail ? view.videos.flatMap((video) => videoBlock(video, accent)) : []),
+    ...(view.includeDetail && view.videos.length ? stageBlocks(view, accent) : []),
     ...failureBlock(view),
   ];
 
@@ -61,14 +62,20 @@ function qualitativeGroup(title: string, items: string[]) {
   return [text(title, "0F172A"), ...items.map((item) => text(`• ${item}`))];
 }
 
+function stageBlocks(view: ReportView, accent: string) {
+  return [
+    heading(STAGE_SECTION, HeadingLevel.HEADING_2, accent),
+    ...view.videos.flatMap((video) => videoBlock(video, accent)),
+  ];
+}
+
 function videoBlock(video: ReportView["videos"][number], accent: string) {
   const blocks = [
-    heading(video.fileName, HeadingLevel.HEADING_2, accent),
-    text(`Tempo dos elementos: ${video.total}`),
+    heading(video.stageTitle, HeadingLevel.HEADING_3, accent),
     ...(video.observations ? [text(video.observations)] : []),
   ];
   if (!video.rows.length) return [...blocks, text("Nenhum movimento medido.")];
-  return [...blocks, movementTable(video.rows, accent)];
+  return [...blocks, ...video.rows.map((row) => text(`${row.measure}. ${row.line}`))];
 }
 
 function failureBlock(view: ReportView) {
@@ -113,28 +120,6 @@ function kpiTable(view: ReportView, accent: string) {
   });
 }
 
-function movementTable(rows: ReportView["videos"][number]["rows"], accent: string) {
-  const widths = [1800, 1400, 1100, 1100, 1200, 3400];
-  const header = ["Movimento", "Status", "Início", "Fim", "Duração", "Notas"];
-  return new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    rows: [
-      new TableRow({
-        tableHeader: true,
-        children: header.map((label, index) => cell(label, widths[index], true, accent)),
-      }),
-      ...rows.map(
-        (row) =>
-          new TableRow({
-            children: [row.name, row.status, row.start, row.end, row.duration, row.notes].map((value, index) =>
-              cell(value, widths[index], false, accent),
-            ),
-          }),
-      ),
-    ],
-  });
-}
-
 function kpiCell(label: string, value: string, accent: string) {
   return new TableCell({
     width: { size: 3000, type: WidthType.DXA },
@@ -143,14 +128,6 @@ function kpiCell(label: string, value: string, accent: string) {
       new Paragraph({ children: [run(label, { size: 16, color: "64748B" })] }),
       new Paragraph({ children: [run(value, { bold: true, size: 24 })] }),
     ],
-  });
-}
-
-function cell(value: string, width: number, header: boolean, accent: string) {
-  return new TableCell({
-    width: { size: width, type: WidthType.DXA },
-    shading: header ? { fill: accent } : undefined,
-    children: [new Paragraph({ children: [run(value || "—", { bold: header, color: header ? "FFFFFF" : "1F2933", size: 16 })] })],
   });
 }
 

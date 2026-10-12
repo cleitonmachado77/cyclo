@@ -1,5 +1,6 @@
 import { formatSeconds } from "@/lib/format";
 import { buildQualitative, type QualitativeSection } from "@/lib/report-qualitative";
+import { measureText, stageHeading } from "@/lib/report-stages";
 import { formatReportDate, reportFileBase, reportStatusLabel } from "@/lib/report-txt";
 import type { MovementTiming } from "@/types/activity";
 import type { ConsolidatedReport, RunStatus } from "@/types/pipeline";
@@ -38,10 +39,13 @@ export type ReportView = {
   cycles: ChartPoint[];
   cycleNote: string | null;
   videos: Array<{
+    stageTitle: string;
     fileName: string;
     total: string;
     observations: string;
     rows: Array<{
+      measure: number;
+      line: string;
       name: string;
       status: string;
       start: string;
@@ -109,11 +113,14 @@ export function buildReportView(input: {
       cycleSamples.length > shown.length
         ? `Gráfico com os primeiros ${shown.length} de ${cycleSamples.length} ciclos completos.`
         : null,
-    videos: report.videos.map((video) => ({
+    videos: report.videos.map((video, stage) => ({
+      stageTitle: stageHeading(stage + 1, video.fileName, video.totalDurationSeconds),
       fileName: video.fileName,
       total: formatSeconds(video.totalDurationSeconds),
       observations: video.observations || "",
-      rows: video.movements.map((movement) => ({
+      rows: video.movements.map((movement, index) => ({
+        measure: index + 1,
+        line: measureText(movement),
         name: movement.name,
         status: movementStatus(movement.status),
         start: movement.startTime,
