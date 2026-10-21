@@ -3,6 +3,7 @@ import { readActivityReport } from "@/lib/activity-reports";
 import { renderReportDocx } from "@/lib/report-docx";
 import { renderReportPdf } from "@/lib/report-pdf";
 import { renderReportTxt } from "@/lib/report-txt";
+import { renderReportXlsx } from "@/lib/report-xlsx";
 import { presentReport } from "@/lib/report-layout";
 import { buildReportView } from "@/lib/report-view";
 import { getActivity } from "@/lib/store";
@@ -11,7 +12,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type Params = { params: Promise<{ id: string; runId: string }> };
-type ReportFormat = "txt" | "pdf" | "docx";
+type ReportFormat = "txt" | "pdf" | "docx" | "xlsx";
 
 export async function GET(request: Request, { params }: Params) {
   const { id, runId } = await params;
@@ -44,6 +45,14 @@ export async function GET(request: Request, { params }: Params) {
         new Uint8Array(body),
       );
     }
+    if (format === "xlsx") {
+      const body = await renderReportXlsx(view, source.report);
+      return attachment(
+        `${view.fileBase}.xlsx`,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        new Uint8Array(body),
+      );
+    }
 
     const text = renderReportTxt(source);
     return attachment(`${view.fileBase}.txt`, "text/plain; charset=utf-8", `\uFEFF${text}`);
@@ -55,7 +64,7 @@ export async function GET(request: Request, { params }: Params) {
 
 function reportFormat(value: string | null): ReportFormat | null {
   if (!value || value === "txt") return "txt";
-  if (value === "pdf" || value === "docx") return value;
+  if (value === "pdf" || value === "docx" || value === "xlsx") return value;
   return null;
 }
 

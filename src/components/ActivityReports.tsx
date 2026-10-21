@@ -59,7 +59,7 @@ export function ActivityReports({
       <h3 className="report-files-title">Arquivos do relatório</h3>
       {error ? <p className="muted">{error}</p> : null}
       {!error && reports.length === 0 ? (
-        <p className="muted">Os relatórios gerados aparecem aqui em TXT, PDF e Word.</p>
+        <p className="muted">Os relatórios gerados aparecem aqui em TXT, PDF, Word e Excel.</p>
       ) : null}
       <div className="report-list">
         {reports.map((report) => {
@@ -82,6 +82,13 @@ export function ActivityReports({
                 </a>
                 <a className="btn btn-secondary btn-sm" href={`${report.downloadUrl}?format=docx`} download={`${baseName}.docx`}>
                   Word
+                </a>
+                <a
+                  className="btn btn-secondary btn-sm"
+                  href={`${report.downloadUrl}?format=xlsx`}
+                  download={`${baseName}.xlsx`}
+                >
+                  Excel
                 </a>
               </div>
             </div>
