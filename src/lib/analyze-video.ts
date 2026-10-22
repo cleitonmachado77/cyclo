@@ -5,8 +5,12 @@ import { AnalysisEta } from "@/lib/analysis-eta";
 import { formatClock, parseClock } from "@/lib/clock";
 import { toUserMessage } from "@/lib/errors";
 import { formatBytes } from "@/lib/format";
+import { waitIfAnalysisPaused } from "@/lib/analysis-job";
 import { analyzeVideoSegment } from "@/lib/gemini-segment";
 import { stitchSegments, type SegmentSlice } from "@/lib/segment-stitch";
+
+/** Pausa entre trechos para não estourar RPM/TPM do Gemini. */
+const INTER_SEGMENT_DELAY_MS = Number(process.env.GEMINI_INTER_SEGMENT_MS || 12_000);
 import {
   cutSegment,
   inspectMedia,
@@ -45,9 +49,11 @@ export async function analyzeStoredVideo(input: {
   video: VideoFile;
   eta: AnalysisEta;
   videosAfter: number;
+  signal?: AbortSignal;
   onProgress: (event: VideoProgress) => void;
   onCheckpoint?: (result: AnalysisItemResult) => Promise<void>;
 }): Promise<AnalysisItemResult> {
+  throwIfAborted(input.signal);
   const workDir = path.join(os.tmpdir(), `cyclo-${input.video.id}-${Date.now()}`);
   await fs.mkdir(workDir, { recursive: true });
   const sourcePath = path.join(workDir, "source.mp4");
@@ -117,6 +123,19 @@ export async function analyzeStoredVideo(input: {
     const singleFile = windows.length === 1 && media.bytes <= MAX_SEGMENT_BYTES;
 
     for (let index = 0; index < windows.length; index += 1) {
+      throwIfAborted(input.signal);
+      await waitIfAnalysisPaused(input.activity.id, input.signal);
+      throwIfAborted(input.signal);
+      if (index > 0 && INTER_SEGMENT_DELAY_MS > 0) {
+        report(
+          "analyze",
+          32 + Math.round((index / windows.length) * 60),
+          "Pausa entre trechos",
+          `${Math.ceil(INTER_SEGMENT_DELAY_MS / 1000)}s para reduzir pressão na API`,
+          { index: index + 1, count: windows.length },
+        );
+        await sleep(INTER_SEGMENT_DELAY_MS, input.signal);
+      }
       const window = windows[index];
       const segmentPath = singleFile ? mediaPath : path.join(workDir, `part-${index + 1}.mp4`);
       const position = { index: index + 1, count: windows.length };
@@ -145,6 +164,7 @@ export async function analyzeStoredVideo(input: {
           endSeconds: window.endSeconds,
           overlapSeconds: window.overlapSeconds,
           handoff,
+          signal: input.signal,
           onProgress: (message, detail) => {
             report("analyze", 34 + Math.round((index / windows.length) * 60), message, detail, position);
           },
@@ -162,6 +182,7 @@ export async function analyzeStoredVideo(input: {
         });
         handoff = latestMovement(analysis.movements);
       } catch (error) {
+        if (isAbortError(error) || input.signal?.aborted) throw error;
         const reason = toUserMessage(error, "Este trecho não pôde ser medido.");
         slices.push({
           index,
@@ -236,5 +257,36 @@ function buildStages(active: StageId, proxySkipped: boolean, detail?: string): M
     else if (index < activeIndex) status = "done";
     else if (index === activeIndex) status = "active";
     return { id, label, status, detail: status === "active" ? detail : undefined };
+  });
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (!signal?.aborted) return;
+  const reason = typeof signal.reason === "string" ? signal.reason : "Análise cancelada.";
+  throw new DOMException(reason, "AbortError");
+}
+
+function isAbortError(error: unknown) {
+  return (
+    (error instanceof DOMException && error.name === "AbortError") ||
+    (error instanceof Error && error.name === "AbortError")
+  );
+}
+
+function sleep(ms: number, signal?: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("Análise cancelada.", "AbortError"));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException("Análise cancelada.", "AbortError"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }

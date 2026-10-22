@@ -574,6 +574,17 @@ a.btn {
   margin: 0.35rem 0 0.85rem;
 }
 
+.analysis-live.is-paused {
+  border-color: rgba(232, 184, 74, 0.45);
+}
+
+.analysis-live-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
 .analysis-live-head {
   display: flex;
   align-items: center;

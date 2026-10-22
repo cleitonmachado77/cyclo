@@ -6,8 +6,12 @@ import { formatBytes } from "@/lib/format";
 import { probeDurationSeconds, progressSeconds, runFfmpeg } from "@/lib/media-tools";
 import { getSupabaseAdmin, VIDEO_BUCKET } from "@/lib/supabase/server";
 
-export const TARGET_SEGMENT_SECONDS = 8 * 60;
-export const SEGMENT_OVERLAP_SECONDS = 10;
+/**
+ * Equilíbrio entre timeout (trechos longos) e cota (muitos trechos).
+ * 5 min ≈ menos chamadas que 3 min, ainda bem abaixo dos 8 min que estouravam deadline.
+ */
+export const TARGET_SEGMENT_SECONDS = 5 * 60;
+export const SEGMENT_OVERLAP_SECONDS = 8;
 export const MAX_SEGMENT_BYTES = 50 * 1024 * 1024;
 
 export type SegmentWindow = {

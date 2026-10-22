@@ -11,6 +11,7 @@ import type {
 import { analysisResultToLegacy } from "@/types/pipeline";
 import { AnalysisEta } from "@/lib/analysis-eta";
 import { analyzeStoredVideo } from "@/lib/analyze-video";
+import { cancelAnalysisJob, waitIfAnalysisPaused } from "@/lib/analysis-job";
 import { toUserMessage } from "@/lib/errors";
 import { getActivity, updateActivity } from "@/lib/store";
 import { getSupabaseAdmin } from "@/lib/supabase/server";
@@ -177,11 +178,56 @@ export function buildConsolidatedReport(
   };
 }
 
+/** Cancela job em memória e marca runs/itens em andamento no banco. */
+export async function cancelActivityAnalysis(activityId: string, reason = "Análise cancelada.") {
+  cancelAnalysisJob(activityId, reason);
+
+  const supabase = getSupabaseAdmin();
+  const { data: runs } = await supabase
+    .from("analysis_runs")
+    .select("id")
+    .eq("activity_id", activityId)
+    .in("status", ["queued", "running"]);
+
+  const runIds = (runs || []).map((run) => String(run.id));
+  if (runIds.length) {
+    await supabase
+      .from("analysis_runs")
+      .update({
+        status: "error",
+        error_message: reason,
+        finished_at: new Date().toISOString(),
+      })
+      .in("id", runIds);
+
+    await supabase
+      .from("analysis_items")
+      .update({
+        status: "skipped",
+        error_message: reason,
+        finished_at: new Date().toISOString(),
+      })
+      .in("run_id", runIds)
+      .in("status", ["queued", "processing"]);
+  }
+
+  const activity = await getActivity(activityId);
+  if (activity) {
+    await updateActivity(activityId, {
+      status: activity.videos.length && activity.prompt.trim() ? "ready" : "draft",
+      errorMessage: reason,
+    });
+  }
+
+  return { cancelled: true, runIds };
+}
+
 export async function runAnalysisPipeline(
   activity: Activity,
   options?: {
     source?: PipelineSource;
     retentionHours?: number;
+    signal?: AbortSignal;
     onProgress?: ProgressCallback;
   },
 ): Promise<{ activity: Activity; run: AnalysisRun }> {
@@ -263,6 +309,9 @@ export async function runAnalysisPipeline(
   );
 
   for (let index = 0; index < sortedItems.length; index += 1) {
+    throwIfAborted(options?.signal);
+    await waitIfAnalysisPaused(activity.id, options?.signal);
+    throwIfAborted(options?.signal);
     const item = sortedItems[index];
     const video = activity.videos.find((entry) => entry.id === item.video_id);
     if (!video) continue;
@@ -298,6 +347,7 @@ export async function runAnalysisPipeline(
         video,
         eta,
         videosAfter: sortedItems.length - index - 1,
+        signal: options?.signal,
         onCheckpoint: async (partial) => {
           await supabase
             .from("analysis_items")
@@ -352,6 +402,11 @@ export async function runAnalysisPipeline(
         itemPercent: 100,
       });
     } catch (error) {
+      if (isAbortError(error) || options?.signal?.aborted) {
+        await markRunCancelled(supabase, runRow.id, activity.id);
+        throw error instanceof Error ? error : new DOMException("Análise cancelada.", "AbortError");
+      }
+
       const message = toUserMessage(
         error,
         "Não foi possível analisar este vídeo agora.",
@@ -382,6 +437,8 @@ export async function runAnalysisPipeline(
       });
     }
   }
+
+  throwIfAborted(options?.signal);
 
   emit({
     phase: "consolidating",
@@ -472,4 +529,52 @@ export async function runAnalysisPipeline(
   if (!fresh) throw new Error("Atividade não encontrada após análise.");
 
   return { activity: fresh, run };
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (!signal?.aborted) return;
+  const reason = typeof signal.reason === "string" ? signal.reason : "Análise cancelada.";
+  throw new DOMException(reason, "AbortError");
+}
+
+function isAbortError(error: unknown) {
+  return (
+    (error instanceof DOMException && error.name === "AbortError") ||
+    (error instanceof Error && error.name === "AbortError")
+  );
+}
+
+async function markRunCancelled(
+  supabase: ReturnType<typeof getSupabaseAdmin>,
+  runId: string,
+  activityId: string,
+  reason = "Análise cancelada.",
+) {
+  await supabase
+    .from("analysis_runs")
+    .update({
+      status: "error",
+      error_message: reason,
+      finished_at: new Date().toISOString(),
+    })
+    .eq("id", runId)
+    .in("status", ["queued", "running"]);
+
+  await supabase
+    .from("analysis_items")
+    .update({
+      status: "skipped",
+      error_message: reason,
+      finished_at: new Date().toISOString(),
+    })
+    .eq("run_id", runId)
+    .in("status", ["queued", "processing"]);
+
+  const activity = await getActivity(activityId);
+  if (activity) {
+    await updateActivity(activityId, {
+      status: activity.videos.length && activity.prompt.trim() ? "ready" : "draft",
+      errorMessage: reason,
+    });
+  }
 }

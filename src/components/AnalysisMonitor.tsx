@@ -71,7 +71,25 @@ export type AnalysisMonitorState = {
   jobId?: string;
 };
 
-export function AnalysisMonitor({ progress }: { progress: AnalysisMonitorState }) {
+type AnalysisMonitorProps = {
+  progress: AnalysisMonitorState;
+  controlling?: boolean;
+  paused?: boolean;
+  busy?: boolean;
+  onPause?: () => void;
+  onResume?: () => void;
+  onStop?: () => void;
+};
+
+export function AnalysisMonitor({
+  progress,
+  controlling = false,
+  paused = false,
+  busy = false,
+  onPause,
+  onResume,
+  onStop,
+}: AnalysisMonitorProps) {
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -84,17 +102,52 @@ export function AnalysisMonitor({ progress }: { progress: AnalysisMonitorState }
     : progress.elapsedSeconds;
   const sinceEvent = Math.max(0, Math.round((now - progress.receivedAt) / 1000));
   const eta =
-    progress.phase === "done"
-      ? 0
+    progress.phase === "done" || paused
+      ? progress.phase === "done"
+        ? 0
+        : progress.etaSeconds
       : progress.etaSeconds == null
         ? null
         : Math.max(0, progress.etaSeconds - sinceEvent);
 
   return (
-    <section className="panel analysis-live">
+    <section className={`panel analysis-live ${paused ? "is-paused" : ""}`}>
       <div className="analysis-live-head">
-        <h2 className="panel-title">Visor da análise</h2>
-        <span className="progress-label">{progress.percent}%</span>
+        <h2 className="panel-title">Visor da análise{paused ? " · pausada" : ""}</h2>
+        <div className="analysis-live-actions">
+          {controlling ? (
+            <>
+              {paused ? (
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={busy}
+                  onClick={onResume}
+                >
+                  Continuar
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={busy}
+                  onClick={onPause}
+                >
+                  Pausar
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn btn-danger btn-sm"
+                disabled={busy}
+                onClick={onStop}
+              >
+                Encerrar
+              </button>
+            </>
+          ) : null}
+          <span className="progress-label">{progress.percent}%</span>
+        </div>
       </div>
 
       <div className="monitor-clocks">

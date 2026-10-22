@@ -1,5 +1,12 @@
-import { launchAnalysisJob, getActiveJob, getJob, type AnalysisJob } from "@/lib/analysis-job";
-import { runAnalysisPipeline } from "@/lib/pipeline";
+import {
+  launchAnalysisJob,
+  getActiveJob,
+  getJob,
+  pauseAnalysisJob,
+  resumeAnalysisJob,
+  type AnalysisJob,
+} from "@/lib/analysis-job";
+import { cancelActivityAnalysis, runAnalysisPipeline } from "@/lib/pipeline";
 import { getActivity } from "@/lib/store";
 
 export const runtime = "nodejs";
@@ -40,15 +47,62 @@ export async function POST(request: Request, { params }: Params) {
     return Response.json({ error: "Informe o prompt com os movimentos a reconhecer." }, { status: 400 });
   }
 
-  const job = launchAnalysisJob(id, async (onProgress) => {
-    const result = await runAnalysisPipeline(activity, {
+  const maxVideos = Number(request.headers.get("x-max-videos") || 0);
+  const scopedActivity =
+    Number.isFinite(maxVideos) && maxVideos > 0
+      ? { ...activity, videos: activity.videos.slice(0, maxVideos) }
+      : activity;
+
+  const job = launchAnalysisJob(id, async (onProgress, signal) => {
+    const result = await runAnalysisPipeline(scopedActivity, {
       source: "manual",
+      signal,
       onProgress: (event) => onProgress({ ...event }),
     });
     return { activity: result.activity, run: result.run };
   });
 
   return streamJob(job);
+}
+
+/** Pausa ou retoma a análise em andamento (cooperativo: vale no próximo trecho/vídeo). */
+export async function PATCH(request: Request, { params }: Params) {
+  const { id } = await params;
+  const activity = await getActivity(id);
+  if (!activity) {
+    return Response.json({ error: "Atividade não encontrada." }, { status: 404 });
+  }
+
+  const body = (await request.json().catch(() => null)) as { action?: string } | null;
+  const action = body?.action;
+  const active = getActiveJob(id);
+
+  if (!active) {
+    return Response.json({ error: "Nenhuma análise em andamento." }, { status: 409 });
+  }
+
+  if (action === "pause") {
+    const ok = pauseAnalysisJob(id);
+    return Response.json({ ok, paused: true });
+  }
+  if (action === "resume") {
+    const ok = resumeAnalysisJob(id);
+    return Response.json({ ok, paused: false });
+  }
+
+  return Response.json({ error: "Use action: pause ou resume." }, { status: 400 });
+}
+
+/** Interrompe a análise em andamento (job em memória + runs no banco). */
+export async function DELETE(_request: Request, { params }: Params) {
+  const { id } = await params;
+  const activity = await getActivity(id);
+  if (!activity) {
+    return Response.json({ error: "Atividade não encontrada." }, { status: 404 });
+  }
+
+  const result = await cancelActivityAnalysis(id, "Análise cancelada.");
+  return Response.json({ ok: true, ...result });
 }
 
 function streamJob(job: AnalysisJob) {

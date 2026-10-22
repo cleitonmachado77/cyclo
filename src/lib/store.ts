@@ -5,6 +5,7 @@ import type {
   CreateActivityInput,
   VideoFile,
 } from "@/types/activity";
+import { reconcileStaleAnalyzing, reconcileStaleAnalyzingMany } from "@/lib/analysis-stale";
 import { getPublicVideoUrl, getSupabaseAdmin, VIDEO_BUCKET } from "@/lib/supabase/server";
 
 const DEFAULT_COMPANY_ID =
@@ -111,7 +112,8 @@ export async function listActivities(): Promise<Activity[]> {
 
   const rows = (data ?? []) as ActivityRow[];
   const videosMap = await fetchVideosByActivityIds(rows.map((row) => row.id));
-  return rows.map((row) => mapActivity(row, videosMap.get(row.id) ?? []));
+  const activities = rows.map((row) => mapActivity(row, videosMap.get(row.id) ?? []));
+  return reconcileStaleAnalyzingMany(activities);
 }
 
 export async function getActivity(id: string): Promise<Activity | null> {
@@ -128,7 +130,7 @@ export async function getActivity(id: string): Promise<Activity | null> {
   if (!data) return null;
 
   const videosMap = await fetchVideosByActivityIds([id]);
-  return mapActivity(data as ActivityRow, videosMap.get(id) ?? []);
+  return reconcileStaleAnalyzing(mapActivity(data as ActivityRow, videosMap.get(id) ?? []));
 }
 
 export async function createActivity(input: CreateActivityInput): Promise<Activity> {

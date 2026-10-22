@@ -41,6 +41,8 @@ export default function ActivityDetailPage({
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
+  const [analysisPaused, setAnalysisPaused] = useState(false);
+  const [analysisControlBusy, setAnalysisControlBusy] = useState(false);
   const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress | null>(null);
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -208,8 +210,75 @@ export default function ActivityDetailPage({
     }
   }
 
+  async function pauseAnalysis() {
+    setAnalysisControlBusy(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/activities/${id}/analyze`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "pause" }),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(data?.error || "Não foi possível pausar.");
+      setAnalysisPaused(true);
+      setMessage("Pausa solicitada. Vale no próximo trecho ou vídeo.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erro ao pausar.");
+    } finally {
+      setAnalysisControlBusy(false);
+    }
+  }
+
+  async function resumeAnalysis() {
+    setAnalysisControlBusy(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/activities/${id}/analyze`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "resume" }),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(data?.error || "Não foi possível continuar.");
+      setAnalysisPaused(false);
+      setMessage("Análise retomada.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erro ao continuar.");
+    } finally {
+      setAnalysisControlBusy(false);
+    }
+  }
+
+  async function refreshActivity() {
+    const response = await fetch(`/api/activities/${id}`);
+    const data = await response.json().catch(() => null);
+    if (response.ok && data?.activity) setActivity(data.activity as Activity);
+  }
+
+  async function stopAnalysis() {
+    if (!confirm("Encerrar a análise agora? O progresso parcial dos trechos já salvos será mantido no run.")) {
+      return;
+    }
+    setAnalysisControlBusy(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/activities/${id}/analyze`, { method: "DELETE" });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(data?.error || "Não foi possível encerrar.");
+      setAnalysisPaused(false);
+      setMessage("Análise encerrada.");
+      await refreshActivity();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erro ao encerrar.");
+    } finally {
+      setAnalysisControlBusy(false);
+    }
+  }
+
   async function runAnalysis() {
     setAnalyzing(true);
+    setAnalysisPaused(false);
     setError(null);
     setMessage(null);
     setAnalysisProgress(startMonitor("Preparando esteira de análise..."));
@@ -261,11 +330,15 @@ export default function ActivityDetailPage({
           if (typeof payload.jobId === "string") jobId = payload.jobId;
 
           if (eventName === "progress") {
+            const phase = String(payload.phase || "");
+            if (phase === "paused") setAnalysisPaused(true);
+            else if (phase && phase !== "paused") setAnalysisPaused(false);
             setAnalysisProgress((prev) => applyAnalysisProgress(payload, prev));
           }
 
           if (eventName === "done") {
             completed = true;
+            setAnalysisPaused(false);
             const nextActivity = payload.activity as Activity | undefined;
             if (nextActivity) setActivity(nextActivity);
             setMessage(`Análise concluída com ${nextActivity?.analysis?.model || "IA"}.`);
@@ -285,14 +358,19 @@ export default function ActivityDetailPage({
 
           if (eventName === "error") {
             completed = true;
+            setAnalysisPaused(false);
             const nextActivity = payload.activity as Activity | undefined;
             if (nextActivity) setActivity(nextActivity);
-            throw new Error(
-              toUserMessage(
-                payload.error,
-                "Não foi possível concluir a análise agora. Tente novamente em instantes.",
-              ),
+            const reason = toUserMessage(
+              payload.error,
+              "Não foi possível concluir a análise agora. Tente novamente em instantes.",
             );
+            if (/cancelad/i.test(reason) || /encerrad/i.test(reason)) {
+              setMessage(reason);
+              void refreshActivity();
+              return;
+            }
+            throw new Error(reason);
           }
         });
 
@@ -319,14 +397,19 @@ export default function ActivityDetailPage({
         }
       }
     } catch (err) {
-      setError(
-        toUserMessage(
-          err,
-          "Não foi possível concluir a análise agora. Tente novamente em instantes.",
-        ),
+      const reason = toUserMessage(
+        err,
+        "Não foi possível concluir a análise agora. Tente novamente em instantes.",
       );
+      if (/cancelad/i.test(reason) || /encerrad/i.test(reason)) {
+        setMessage(reason);
+      } else {
+        setError(reason);
+      }
     } finally {
       setAnalyzing(false);
+      setAnalysisPaused(false);
+      setAnalysisControlBusy(false);
     }
   }
 
@@ -387,7 +470,17 @@ export default function ActivityDetailPage({
           </div>
         )}
 
-        {analysisProgress && <AnalysisMonitor progress={analysisProgress} />}
+        {analysisProgress && (
+          <AnalysisMonitor
+            progress={analysisProgress}
+            controlling={analyzing}
+            paused={analysisPaused}
+            busy={analysisControlBusy}
+            onPause={() => void pauseAnalysis()}
+            onResume={() => void resumeAnalysis()}
+            onStop={() => void stopAnalysis()}
+          />
+        )}
 
         <div className="split">
           <form className="panel form-grid" onSubmit={saveDetails}>
