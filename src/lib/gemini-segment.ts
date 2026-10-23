@@ -1,6 +1,7 @@
-import { GoogleGenAI, MediaProcessing } from "@google/genai";
+import { GoogleGenAI, MediaProcessing, MediaResolution } from "@google/genai";
 import { buildAnalysisSystemPrompt } from "@/lib/analysis-prompt";
 import { formatClock } from "@/lib/clock";
+import { elementTypeOf, normalizeStation } from "@/lib/time-study";
 import {
   errorText,
   isQuotaError,
@@ -9,7 +10,7 @@ import {
   isTimeoutError,
   retryDelayMs,
 } from "@/lib/gemini-retry";
-import type { Activity, MovementTiming } from "@/types/activity";
+import type { Activity, MovementTiming, StationInfo } from "@/types/activity";
 
 const MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash";
 const FALLBACK_MODELS = (process.env.GEMINI_FALLBACK_MODELS || "gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash")
@@ -26,12 +27,19 @@ const HTTP_TIMEOUT_MS = Number(process.env.GEMINI_HTTP_TIMEOUT_MS || 10 * 60 * 1
  * Mantém desligado por padrão; ative com GEMINI_SEGMENT_AGENTIC=1 se necessário.
  */
 const USE_AGENTIC = process.env.GEMINI_SEGMENT_AGENTIC === "1";
+/**
+ * O Gemini amostra vídeo a 1 quadro/s por padrão, o que impede leitura abaixo do segundo.
+ * 5 quadros/s com resolução baixa mantém o custo de tokens próximo do padrão (1 q/s em resolução média).
+ */
+const VIDEO_FPS = clampFps(Number(process.env.GEMINI_VIDEO_FPS || 5));
+const MEDIA_RESOLUTION = mediaResolution(process.env.GEMINI_MEDIA_RESOLUTION || "low");
 
 export type SegmentAnalysis = {
   movements: MovementTiming[];
   summary: string;
   observations?: string;
   model: string;
+  stations: StationInfo[];
 };
 
 type SegmentRequest = {
@@ -44,6 +52,7 @@ type SegmentRequest = {
   endSeconds: number;
   overlapSeconds: number;
   handoff?: string;
+  knownStations?: StationInfo[];
   signal?: AbortSignal;
   onProgress?: (message: string, detail?: string) => void;
 };
@@ -183,6 +192,7 @@ function buildContents(ready: ReadyFile, request: SegmentRequest) {
           fileUri: ready.uri!,
           mimeType: ready.mimeType || request.mimeType || "video/mp4",
         },
+        videoMetadata: { fps: VIDEO_FPS },
         ...(USE_AGENTIC ? { mediaProcessing: MediaProcessing.AGENTIC } : {}),
       },
       { text: segmentPrompt(request) },
@@ -191,7 +201,10 @@ function buildContents(ready: ReadyFile, request: SegmentRequest) {
 }
 
 function buildConfig() {
-  return USE_AGENTIC ? { thinkingConfig: { includeThoughts: true } } : undefined;
+  return {
+    ...(MEDIA_RESOLUTION ? { mediaResolution: MEDIA_RESOLUTION } : {}),
+    ...(USE_AGENTIC ? { thinkingConfig: { includeThoughts: true } } : {}),
+  };
 }
 
 async function generateViaStream(
@@ -271,47 +284,91 @@ async function generateViaUnary(
 function segmentPrompt(request: SegmentRequest) {
   const video = request.activity.videos[0];
   const handoff = request.handoff
-    ? `No corte anterior, o último movimento observado foi: ${request.handoff}.`
+    ? `No corte anterior: ${request.handoff}`
     : "Este é o primeiro trecho do vídeo.";
   const overlap =
     request.overlapSeconds > 0
       ? `Os primeiros ${request.overlapSeconds} segundos repetem o fim do trecho anterior. Continue a sequência, sem recontar o que já terminou nessa sobreposição.`
       : "Não há sobreposição com um trecho anterior.";
+  const stations = request.knownStations?.length
+    ? `Postos já identificados nesta atividade. Use os mesmos números para os mesmos locais e só crie um posto novo para um local diferente:\n${request.knownStations
+        .map((station) => `- ${station.id}: ${station.description}`)
+        .join("\n")}`
+    : "";
 
   return buildAnalysisSystemPrompt(
     request.activity,
     `Este arquivo é a parte ${request.index + 1} de ${request.count} do vídeo "${video?.originalName || "vídeo"}".
 Intervalo no vídeo original: ${formatClock(request.startSeconds)} até ${formatClock(request.endSeconds)}.
-Meça os tempos RELATIVOS a este trecho: 00:00 é o início deste arquivo, não o início do vídeo original.
+Meça os tempos RELATIVOS a este trecho: 00:00.00 é o início deste arquivo, não o início do vídeo original.
+O vídeo chega a ${VIDEO_FPS} quadros por segundo: marque início e fim no quadro em que a ação muda, com centésimos.
 ${overlap}
 ${handoff}
+${stations}
 videoId obrigatório: "${video?.id || ""}".`,
   );
 }
 
+type RawMovement = MovementTiming & { elementType?: string; cycle?: number | string | null };
+
 function mapSegment(rawText: string, model: string): SegmentAnalysis {
   const parsed = extractJson(rawText) as {
     summary?: string;
-    videos?: Array<{ movements?: MovementTiming[]; observations?: string; totalDurationSeconds?: number }>;
+    videos?: Array<{
+      movements?: RawMovement[];
+      observations?: string;
+      totalDurationSeconds?: number;
+      stations?: Array<{ id?: string; description?: string }>;
+    }>;
   };
   const source = parsed.videos?.[0];
   const movements = Array.isArray(source?.movements)
-    ? source.movements.map((movement) => ({
-        name: movement.name || "Movimento",
-        status: movement.status,
-        startTime: movement.startTime || "00:00",
-        endTime: movement.endTime || "00:00",
-        durationSeconds: Number(movement.durationSeconds) || 0,
-        notes: movement.notes,
-      }))
+    ? source.movements.map((movement) => {
+        const mapped: MovementTiming = {
+          name: movement.name || "Movimento",
+          status: movement.status,
+          startTime: movement.startTime || "00:00",
+          endTime: movement.endTime || "00:00",
+          durationSeconds: Number(movement.durationSeconds) || 0,
+          notes: movement.notes,
+          station: normalizeStation(movement.station),
+          operator: movement.operator?.trim() || undefined,
+          cycle: toCycle(movement.cycle),
+        };
+        mapped.elementType = elementTypeOf({ ...mapped, elementType: movement.elementType as MovementTiming["elementType"] });
+        return mapped;
+      })
     : [];
+  const stations = (source?.stations || [])
+    .filter((station) => station.id && station.description)
+    .map((station) => ({ id: normalizeStation(station.id), description: String(station.description).trim() }));
 
   return {
     movements,
     summary: parsed.summary || "Trecho analisado.",
     observations: source?.observations,
     model,
+    stations,
   };
+}
+
+function toCycle(value: RawMovement["cycle"]) {
+  if (value == null || String(value).trim() === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.round(number) : null;
+}
+
+function clampFps(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return 1;
+  return Math.min(24, value);
+}
+
+function mediaResolution(value: string) {
+  const key = value.trim().toLowerCase();
+  if (key === "low") return MediaResolution.MEDIA_RESOLUTION_LOW;
+  if (key === "medium") return MediaResolution.MEDIA_RESOLUTION_MEDIUM;
+  if (key === "high") return MediaResolution.MEDIA_RESOLUTION_HIGH;
+  return undefined;
 }
 
 async function waitUntilActive(

@@ -1,5 +1,6 @@
-import { formatClock, parseClock } from "@/lib/clock";
-import type { MovementTiming } from "@/types/activity";
+import { formatClock, formatPreciseClock, parseClock } from "@/lib/clock";
+import { mergeStations, stationOf } from "@/lib/time-study";
+import type { MovementTiming, StationInfo } from "@/types/activity";
 
 export type SegmentGap = {
   startTime: string;
@@ -17,12 +18,15 @@ export type SegmentSlice = {
   summary?: string;
   observations?: string;
   model?: string;
+  stations?: StationInfo[];
 };
 
 type TimedMovement = MovementTiming & {
   absStart: number;
   absEnd: number;
 };
+
+const CLOCK_IN_TEXT = /\b(?:(\d{1,2}):)?(\d{1,2}):(\d{2})(?:\.(\d{1,2}))?\b/g;
 
 export function stitchSegments(slices: SegmentSlice[]) {
   const kept: TimedMovement[] = [];
@@ -49,7 +53,7 @@ export function stitchSegments(slices: SegmentSlice[]) {
       if (!placed || placed.absEnd <= boundary + 0.4) continue;
 
       const start = Math.max(placed.absStart, boundary);
-      const sameName = [...kept].reverse().find((item) => sameMovement(item.name, placed.name));
+      const sameName = [...kept].reverse().find((item) => sameMovement(item, placed));
       const continuesAcrossCut =
         slice.index > 0 &&
         start <= boundary + 1 &&
@@ -58,8 +62,8 @@ export function stitchSegments(slices: SegmentSlice[]) {
         sameName.absStart <= placed.absEnd;
       if (sameName && continuesAcrossCut) {
         sameName.absEnd = Math.max(sameName.absEnd, placed.absEnd);
-        sameName.durationSeconds = Math.max(0, sameName.absEnd - sameName.absStart);
-        sameName.endTime = formatClock(sameName.absEnd);
+        sameName.durationSeconds = round2(Math.max(0, sameName.absEnd - sameName.absStart));
+        sameName.endTime = formatPreciseClock(sameName.absEnd);
         sameName.status = mergeStatus(sameName.status, placed.status);
         if (placed.notes && !sameName.notes?.includes(placed.notes)) {
           sameName.notes = [sameName.notes, placed.notes].filter(Boolean).join(" · ");
@@ -70,9 +74,9 @@ export function stitchSegments(slices: SegmentSlice[]) {
       kept.push({
         ...placed,
         absStart: start,
-        durationSeconds: Math.max(0, placed.absEnd - start),
-        startTime: formatClock(start),
-        endTime: formatClock(placed.absEnd),
+        durationSeconds: round2(Math.max(0, placed.absEnd - start)),
+        startTime: formatPreciseClock(start),
+        endTime: formatPreciseClock(placed.absEnd),
       });
     }
   }
@@ -82,7 +86,19 @@ export function stitchSegments(slices: SegmentSlice[]) {
     movements: kept.map(({ absStart: _start, absEnd: _end, ...movement }) => movement),
     gaps,
     models: [...new Set(models)],
+    stations: mergeStations(slices.map((slice) => slice.stations)),
   };
+}
+
+/** Horários citados em notes vêm no relógio do trecho; passa para o relógio do vídeo. */
+export function shiftClocksInText(text: string, offsetSeconds: number, spanSeconds: number) {
+  if (!offsetSeconds) return text;
+  return text.replace(CLOCK_IN_TEXT, (match, hours, minutes, seconds, fraction) => {
+    const value =
+      Number(hours || 0) * 3600 + Number(minutes) * 60 + Number(seconds) + (fraction ? Number(`0.${fraction}`) : 0);
+    if (value > spanSeconds + 2) return match;
+    return fraction ? formatPreciseClock(value + offsetSeconds) : formatClock(value + offsetSeconds);
+  });
 }
 
 function placeMovement(movement: MovementTiming, slice: SegmentSlice, span: number) {
@@ -90,9 +106,11 @@ function placeMovement(movement: MovementTiming, slice: SegmentSlice, span: numb
   let relEnd = parseClock(movement.endTime);
   if (relEnd < relStart) relEnd = relStart + Math.max(0, movement.durationSeconds || 0);
 
+  let absoluteClock = false;
   if (span > 0 && relStart > span + 2 && relStart + 1 >= slice.startSeconds) {
     relStart -= slice.startSeconds;
     relEnd -= slice.startSeconds;
+    absoluteClock = true;
   }
 
   relStart = clamp(relStart, 0, span || relStart);
@@ -104,14 +122,18 @@ function placeMovement(movement: MovementTiming, slice: SegmentSlice, span: numb
   const absEnd = slice.startSeconds + (duration > 0 ? relEnd : relStart + movement.durationSeconds);
   return {
     ...movement,
+    station: stationOf(movement),
+    notes: movement.notes && !absoluteClock ? shiftClocksInText(movement.notes, slice.startSeconds, span) : movement.notes,
     absStart,
     absEnd,
     durationSeconds: Math.max(0, absEnd - absStart),
   };
 }
 
-function sameMovement(left: string, right: string) {
-  return left.trim().toLowerCase() === right.trim().toLowerCase();
+function sameMovement(left: MovementTiming, right: MovementTiming) {
+  return (
+    left.name.trim().toLowerCase() === right.name.trim().toLowerCase() && stationOf(left) === stationOf(right)
+  );
 }
 
 function mergeStatus(current: MovementTiming["status"], next: MovementTiming["status"]) {
@@ -122,4 +144,8 @@ function mergeStatus(current: MovementTiming["status"], next: MovementTiming["st
 function clamp(value: number, min: number, max: number) {
   if (!Number.isFinite(max) || max <= min) return Math.max(min, value);
   return Math.min(max, Math.max(min, value));
+}
+
+function round2(value: number) {
+  return Math.round(value * 100) / 100;
 }

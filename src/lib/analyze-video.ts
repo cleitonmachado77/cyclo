@@ -8,6 +8,7 @@ import { formatBytes } from "@/lib/format";
 import { waitIfAnalysisPaused } from "@/lib/analysis-job";
 import { analyzeVideoSegment } from "@/lib/gemini-segment";
 import { stitchSegments, type SegmentSlice } from "@/lib/segment-stitch";
+import { assignCycles, isLeaf, mergeStations, stationOf } from "@/lib/time-study";
 
 /** Pausa entre trechos para não estourar RPM/TPM do Gemini. */
 const INTER_SEGMENT_DELAY_MS = Number(process.env.GEMINI_INTER_SEGMENT_MS || 12_000);
@@ -21,7 +22,7 @@ import {
   TARGET_SEGMENT_SECONDS,
   transcodeProxy,
 } from "@/lib/video-segments";
-import type { Activity, VideoFile } from "@/types/activity";
+import type { Activity, StationInfo, VideoFile } from "@/types/activity";
 import type { AnalysisItemResult, MonitorStage, MonitorStageStatus } from "@/types/pipeline";
 
 type VideoProgress = {
@@ -49,6 +50,7 @@ export async function analyzeStoredVideo(input: {
   video: VideoFile;
   eta: AnalysisEta;
   videosAfter: number;
+  knownStations?: StationInfo[];
   signal?: AbortSignal;
   onProgress: (event: VideoProgress) => void;
   onCheckpoint?: (result: AnalysisItemResult) => Promise<void>;
@@ -120,6 +122,7 @@ export async function analyzeStoredVideo(input: {
 
     const slices: SegmentSlice[] = [];
     let handoff = "";
+    let stations = mergeStations([input.knownStations]);
     const singleFile = windows.length === 1 && media.bytes <= MAX_SEGMENT_BYTES;
 
     for (let index = 0; index < windows.length; index += 1) {
@@ -164,6 +167,7 @@ export async function analyzeStoredVideo(input: {
           endSeconds: window.endSeconds,
           overlapSeconds: window.overlapSeconds,
           handoff,
+          knownStations: stations,
           signal: input.signal,
           onProgress: (message, detail) => {
             report("analyze", 34 + Math.round((index / windows.length) * 60), message, detail, position);
@@ -179,8 +183,10 @@ export async function analyzeStoredVideo(input: {
           summary: analysis.summary,
           observations: analysis.observations,
           model: analysis.model,
+          stations: analysis.stations,
         });
-        handoff = latestMovement(analysis.movements);
+        stations = mergeStations([stations, analysis.stations]);
+        handoff = stationHandoff(analysis.movements);
       } catch (error) {
         if (isAbortError(error) || input.signal?.aborted) throw error;
         const reason = toUserMessage(error, "Este trecho não pôde ser medido.");
@@ -198,54 +204,70 @@ export async function analyzeStoredVideo(input: {
         if (!singleFile) await fs.unlink(segmentPath).catch(() => undefined);
       }
 
-      await input.onCheckpoint?.(toItemResult(input.video, slices, windows.length));
+      await input.onCheckpoint?.(toItemResult(input.video, slices, windows.length, input.knownStations));
     }
 
     report("stitch", 98, "Unindo a sequência do vídeo", input.video.originalName, {
       index: windows.length,
       count: windows.length,
     });
-    return toItemResult(input.video, slices, windows.length);
+    return toItemResult(input.video, slices, windows.length, input.knownStations);
   } finally {
     await fs.rm(workDir, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
-function toItemResult(video: VideoFile, slices: SegmentSlice[], planned: number): AnalysisItemResult {
+function toItemResult(
+  video: VideoFile,
+  slices: SegmentSlice[],
+  planned: number,
+  knownStations?: StationInfo[],
+): AnalysisItemResult {
   const stitched = stitchSegments(slices);
+  const sliceNotes = slices
+    .filter((slice) => slice.observations?.trim())
+    .map((slice) =>
+      planned > 1
+        ? `Trecho ${slice.index + 1} (${formatClock(slice.startSeconds)}–${formatClock(slice.endSeconds)}): ${slice.observations!.trim()}`
+        : slice.observations!.trim(),
+    );
   const notes = [
     `Linha do tempo unificada a partir de ${planned} trecho(s).`,
     stitched.gaps.length
       ? `Lacunas sem medição: ${stitched.gaps.map((gap) => `${gap.startTime}–${gap.endTime} (${gap.reason})`).join("; ")}.`
       : "",
-    slices.map((slice) => slice.observations).find(Boolean) || "",
+    ...sliceNotes,
   ].filter(Boolean);
 
-  const movements = stitched.movements.filter((movement) => movement.durationSeconds > 0);
-  const leaves = movements.filter((movement) => !isRollupMovement(movement.name));
+  const movements = assignCycles(stitched.movements.filter((movement) => movement.durationSeconds > 0));
+  const leaves = movements.filter(isLeaf);
   return {
     videoId: video.id,
     fileName: video.originalName,
     summary: [...slices].reverse().find((slice) => slice.summary)?.summary || "Análise concluída em trechos.",
     movements,
-    totalDurationSeconds: (leaves.length ? leaves : movements).reduce((sum, movement) => sum + movement.durationSeconds, 0),
-    observations: notes.join(" "),
+    totalDurationSeconds: leaves.reduce((sum, movement) => sum + movement.durationSeconds, 0),
+    observations: notes.join("\n"),
     model: stitched.models[0],
     gaps: stitched.gaps,
     segmentCount: planned,
+    stations: mergeStations([stitched.stations, knownStations]),
   };
 }
 
-function isRollupMovement(name: string) {
-  const key = name.trim().toLowerCase();
-  return key === "ciclo completo" || key === "esteira de processo";
-}
-
-function latestMovement(movements: SegmentSlice["movements"]) {
+/** Último elemento e último ciclo de cada posto, para o próximo trecho continuar a numeração. */
+function stationHandoff(movements: SegmentSlice["movements"]) {
   const timed = movements.filter((movement) => movement.status !== "not_found" && movement.durationSeconds > 0);
-  const last = [...timed].sort((a, b) => parseClock(a.endTime) - parseClock(b.endTime)).at(-1);
-  if (!last) return "";
-  return `${last.name} até ${last.endTime} deste trecho (${last.status || "medido"})`;
+  const lines = [...new Set(timed.map(stationOf))].map((station) => {
+    const own = timed.filter((movement) => stationOf(movement) === station);
+    const last = [...own].sort((a, b) => parseClock(a.endTime) - parseClock(b.endTime)).at(-1)!;
+    const cycles = own.map((movement) => movement.cycle).filter((cycle): cycle is number => typeof cycle === "number");
+    const lastCycle = cycles.length ? Math.max(...cycles) : null;
+    return `${station}: último elemento "${last.name}" até ${last.endTime} deste trecho (${last.status || "medido"})${
+      lastCycle ? `; último ciclo numerado ${lastCycle}, continue a partir dele` : ""
+    }.`;
+  });
+  return lines.join("\n");
 }
 
 function buildStages(active: StageId, proxySkipped: boolean, detail?: string): MonitorStage[] {

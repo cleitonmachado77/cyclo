@@ -1,4 +1,5 @@
 import { formatSeconds } from "@/lib/format";
+import { ELEMENT_TYPE_LABEL, UNASSIGNED_STATION, elementTypeOf, stationOf } from "@/lib/time-study";
 import type { MovementTiming } from "@/types/activity";
 
 export const STAGE_SECTION = "Dados brutos por etapa de filmagem";
@@ -8,7 +9,12 @@ export function stageHeading(stage: number, fileName: string, totalSeconds: numb
 }
 
 export function measureText(movement: MovementTiming) {
-  const base = `${movement.name}, ${movement.startTime}–${movement.endTime}, ${formatSeconds(movement.durationSeconds)}, ${movementStatus(movement.status)}`;
+  const station = stationOf(movement);
+  const prefix = station === UNASSIGNED_STATION ? "" : `[${station}] `;
+  const type = ELEMENT_TYPE_LABEL[elementTypeOf(movement)].toLowerCase();
+  const cycle = movement.cycle ? `, ciclo ${movement.cycle}` : "";
+  const operator = movement.operator ? `, ${movement.operator}` : "";
+  const base = `${prefix}${movement.name} (${type}${cycle}${operator}), ${movement.startTime}–${movement.endTime}, ${formatSeconds(movement.durationSeconds)}, ${movementStatus(movement.status)}`;
   const notes = movement.notes?.trim().replace(/\.+$/, "");
   return notes ? `${base}. ${notes}.` : `${base}.`;
 }

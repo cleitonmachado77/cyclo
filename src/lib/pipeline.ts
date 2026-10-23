@@ -15,6 +15,8 @@ import { cancelAnalysisJob, waitIfAnalysisPaused } from "@/lib/analysis-job";
 import { toUserMessage } from "@/lib/errors";
 import { getActivity, updateActivity } from "@/lib/store";
 import { getSupabaseAdmin } from "@/lib/supabase/server";
+import { buildStationStudies, elementTypeOf, mergeStations, stationOf } from "@/lib/time-study";
+import { formatSeconds } from "@/lib/format";
 
 const DEFAULT_RETENTION_HOURS = Number(process.env.VIDEO_RETENTION_HOURS || 72);
 
@@ -87,10 +89,13 @@ export function buildConsolidatedReport(
     for (const movement of result.movements) {
       if (movement.status === "not_found") continue;
       if (!movement.durationSeconds || movement.durationSeconds <= 0) continue;
+      if (elementTypeOf(movement) === "sem_visao") continue;
 
-      const key = movement.name.trim().toLowerCase();
+      const station = stationOf(movement);
+      const key = `${station}|${movement.name.trim().toLowerCase()}`;
       const current = movementMap.get(key) || {
         name: movement.name,
+        station,
         sampleCount: 0,
         avgDurationSeconds: 0,
         minDurationSeconds: Number.POSITIVE_INFINITY,
@@ -127,7 +132,9 @@ export function buildConsolidatedReport(
     movements: entry.result!.movements,
     totalDurationSeconds: entry.result!.totalDurationSeconds,
     observations: entry.result!.observations,
+    stations: entry.result!.stations,
   }));
+  const studies = buildStationStudies(videos);
 
   const models = [
     ...new Set(successes.map((entry) => entry.result?.model).filter(Boolean) as string[]),
@@ -147,10 +154,19 @@ export function buildConsolidatedReport(
       `${zeroVideos} sem ciclo/trabalho cronometrado (critério de conclusão não observado ou só anotações).`,
     );
   }
-  if (movements.length) {
+  if (studies.length) {
     summaryParts.push(
-      `Consolidados: ${movements
-        .map((m) => `${m.name} (média ${m.avgDurationSeconds.toFixed(1)}s, n=${m.sampleCount})`)
+      `${studies.length} posto(s) separados. ${studies
+        .map((study) =>
+          [
+            `${study.station}: ${study.cycleCount} ciclo(s) completo(s)`,
+            study.cycleCount ? `ciclo de trabalho médio ${formatSeconds(study.workCycleSeconds)}` : "",
+            study.waits.totalSeconds ? `esperas ${formatSeconds(study.waits.totalSeconds)}` : "",
+            study.foreign.totalSeconds ? `estranhos ${formatSeconds(study.foreign.totalSeconds)}` : "",
+          ]
+            .filter(Boolean)
+            .join(", "),
+        )
         .join("; ")}.`,
     );
   }
@@ -303,6 +319,7 @@ export async function runAnalysisPipeline(
   });
 
   const collected: Array<{ video: VideoFile; result?: AnalysisItemResult; error?: string }> = [];
+  let knownStations = mergeStations([]);
   const eta = new AnalysisEta();
   const sortedItems = [...createdItems].sort(
     (a, b) => Number(a.sort_order) - Number(b.sort_order),
@@ -347,6 +364,7 @@ export async function runAnalysisPipeline(
         video,
         eta,
         videosAfter: sortedItems.length - index - 1,
+        knownStations,
         signal: options?.signal,
         onCheckpoint: async (partial) => {
           await supabase
@@ -387,6 +405,7 @@ export async function runAnalysisPipeline(
         .eq("id", item.id);
 
       collected.push({ video, result: itemResult });
+      knownStations = mergeStations([knownStations, itemResult.stations]);
 
       emit({
         phase: "item_done",

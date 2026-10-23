@@ -11,6 +11,13 @@ export type VideoFile = {
   uploadedAt: string;
 };
 
+/**
+ * repetitivo/casual/estranho/espera/maquina são elementos folha.
+ * "ciclo" é o intervalo do ciclo completo do posto e cobre os elementos folha.
+ * "sem_visao" é tempo em que a câmera não mostra o posto; fica fora das estatísticas.
+ */
+export type ElementType = "repetitivo" | "casual" | "estranho" | "espera" | "maquina" | "ciclo" | "sem_visao";
+
 export type MovementTiming = {
   name: string;
   startTime: string;
@@ -18,6 +25,15 @@ export type MovementTiming = {
   durationSeconds: number;
   notes?: string;
   status?: "complete" | "partial" | "not_found";
+  station?: string;
+  operator?: string;
+  elementType?: ElementType;
+  cycle?: number | null;
+};
+
+export type StationInfo = {
+  id: string;
+  description: string;
 };
 
 export type VideoAnalysis = {
@@ -26,6 +42,7 @@ export type VideoAnalysis = {
   movements: MovementTiming[];
   totalDurationSeconds: number;
   observations?: string;
+  stations?: StationInfo[];
 };
 
 export type AnalysisResult = {

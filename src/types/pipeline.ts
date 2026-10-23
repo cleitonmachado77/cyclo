@@ -1,4 +1,4 @@
-import type { AnalysisResult, MovementTiming, VideoAnalysis } from "@/types/activity";
+import type { AnalysisResult, MovementTiming, StationInfo, VideoAnalysis } from "@/types/activity";
 
 export type PipelineSource = "manual" | "camera" | "api";
 
@@ -22,10 +22,12 @@ export type AnalysisItemResult = {
   rawText?: string;
   gaps?: SegmentGap[];
   segmentCount?: number;
+  stations?: StationInfo[];
 };
 
 export type ConsolidatedMovement = {
   name: string;
+  station?: string;
   sampleCount: number;
   avgDurationSeconds: number;
   minDurationSeconds: number;

@@ -1,6 +1,14 @@
-import { formatSeconds } from "@/lib/format";
 import { buildQualitative, qualitativeIsEmpty } from "@/lib/report-qualitative";
 import { STAGE_SECTION, measureText, stageHeading } from "@/lib/report-stages";
+import {
+  STUDY_METHOD,
+  STUDY_SECTION,
+  buildStationViews,
+  elementLine,
+  readingLine,
+  stationHeading,
+} from "@/lib/report-study";
+import { buildStationStudies } from "@/lib/time-study";
 import type { ConsolidatedReport, RunStatus } from "@/types/pipeline";
 
 const STATUS_LABEL: Record<RunStatus, string> = {
@@ -54,21 +62,34 @@ export function renderReportTxt(input: {
     blocks.push("", "Aviso", input.errorMessage);
   }
 
+  const stations = buildStationViews(buildStationStudies(report.videos));
+  if (stations.length) {
+    blocks.push("", STUDY_SECTION, STUDY_METHOD);
+    for (const station of stations) {
+      blocks.push("", stationHeading(station));
+      blocks.push(...station.indicators.map((item) => `- ${item.label}: ${item.value}`));
+      blocks.push(...station.warnings.map((warning) => `Atenção: ${warning}`));
+      if (station.elements.length) {
+        blocks.push("", "Elementos");
+        blocks.push(...station.elements.map((row) => `- ${elementLine(row)}`));
+      }
+      if (station.casuals.length) {
+        blocks.push("", "Elementos casuais");
+        blocks.push(...station.casuals.map((line) => `- ${line}`));
+      }
+      if (station.readings.labels.length) {
+        blocks.push("", "Leituras por ciclo (s; 0 = não ocorreu)");
+        blocks.push(...station.readings.rows.map((row) => `- ${readingLine(station.readings.labels, row)}`));
+      }
+    }
+  }
+
   const qualitative = buildQualitative(report.videos);
   if (!qualitativeIsEmpty(qualitative)) {
     blocks.push("", "Observações qualitativas sobre ergonomia, fluidez e oportunidades de melhoria.");
     blocks.push(...qualitativeLines("Ergonomia", qualitative.ergonomics));
     blocks.push(...qualitativeLines("Fluidez", qualitative.flow));
     blocks.push(...qualitativeLines("Oportunidades de melhoria", qualitative.improvements));
-  }
-
-  if (report.movements.length) {
-    blocks.push("", "Tempos consolidados");
-    for (const movement of report.movements) {
-      blocks.push(
-        `- ${movement.name}: média ${formatSeconds(movement.avgDurationSeconds)} (n=${movement.sampleCount}, mín ${formatSeconds(movement.minDurationSeconds)}, máx ${formatSeconds(movement.maxDurationSeconds)})`,
-      );
-    }
   }
 
   if (report.videos.length) {

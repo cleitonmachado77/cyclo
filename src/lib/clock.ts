@@ -22,6 +22,14 @@ export function formatClock(totalSeconds: number): string {
   return `${mm}:${ss}`;
 }
 
+/** Relógio com centésimos: MM:SS.cc ou H:MM:SS.cc. */
+export function formatPreciseClock(totalSeconds: number): string {
+  const hundredths = Math.round(Math.max(0, totalSeconds) * 100);
+  const whole = Math.floor(hundredths / 100);
+  const fraction = String(hundredths % 100).padStart(2, "0");
+  return `${formatClock(whole)}.${fraction}`;
+}
+
 export function formatDurationLabel(totalSeconds: number | null | undefined): string {
   if (totalSeconds == null || !Number.isFinite(totalSeconds)) return "Calculando…";
   if (totalSeconds <= 0) return "00:00";

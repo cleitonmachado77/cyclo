@@ -4,6 +4,7 @@ import { renderChart, type ChartImage } from "@/lib/report-chart";
 import { tintColor } from "@/lib/report-layout";
 import { qualitativeIsEmpty } from "@/lib/report-qualitative";
 import { STAGE_SECTION } from "@/lib/report-stages";
+import { STUDY_SECTION, elementLine, readingLine, stationHeading } from "@/lib/report-study";
 import type { ReportView } from "@/lib/report-view";
 
 const FONT = existsSync("C:/Windows/Fonts/arial.ttf") ? "C:/Windows/Fonts/arial.ttf" : "Helvetica";
@@ -23,6 +24,7 @@ export async function renderReportPdf(view: ReportView) {
 
   writeCover(doc, view);
   if (view.includeKpis) writeKpis(doc, view);
+  if (view.stations.length) writeStations(doc, view);
   for (const chart of charts) writeChart(doc, chart.image, chart.caption);
   if (view.includeDetail && view.videos.length) {
     ensure(doc, 36);
@@ -109,6 +111,40 @@ function writeKpis(doc: PDFKit.PDFDocument, view: ReportView) {
   });
   doc.x = doc.page.margins.left;
   doc.y = top + rows * rowStride;
+}
+
+function writeStations(doc: PDFKit.PDFDocument, view: ReportView) {
+  doc.moveDown(0.8);
+  ensure(doc, 80);
+  sectionTitle(doc, STUDY_SECTION, view.accent);
+  doc.font(FONT).fontSize(9).fillColor("#64748b").text(view.studyMethod, { lineGap: 1 });
+  for (const station of view.stations) {
+    ensure(doc, 90);
+    doc.moveDown(0.6);
+    doc.fillColor("#0f172a").font(FONT_BOLD).fontSize(12).text(stationHeading(station));
+    doc.moveDown(0.2);
+    doc.font(FONT).fontSize(10).fillColor("#334155");
+    for (const item of station.indicators) doc.text(`${item.label}: ${item.value}`, { lineGap: 1 });
+    for (const warning of station.warnings) doc.fillColor("#9a3412").text(`Atenção: ${warning}`, { lineGap: 1 });
+    writeGroup(doc, "Elementos", station.elements.map(elementLine));
+    writeGroup(doc, "Elementos casuais", station.casuals);
+    if (station.readings.labels.length) {
+      writeGroup(
+        doc,
+        "Leituras por ciclo (s; 0 = não ocorreu)",
+        station.readings.rows.map((row) => readingLine(station.readings.labels, row)),
+      );
+    }
+  }
+}
+
+function writeGroup(doc: PDFKit.PDFDocument, title: string, items: string[]) {
+  if (!items.length) return;
+  ensure(doc, 48);
+  doc.moveDown(0.3);
+  doc.fillColor("#0f172a").font(FONT_BOLD).fontSize(10).text(title);
+  doc.fillColor("#334155").font(FONT).fontSize(9);
+  doc.list(items, { listType: "bullet", bulletRadius: 1.5, textIndent: 14, bulletIndent: 8, lineGap: 1, paragraphGap: 3 });
 }
 
 function writeChart(doc: PDFKit.PDFDocument, chart: ChartImage | null, caption: string) {

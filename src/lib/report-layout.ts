@@ -1,6 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 import type { ConsolidatedReport } from "@/types/pipeline";
-import type { ChartPoint, ReportChart, ReportView } from "@/lib/report-view";
+import { chartLabel, type ChartPoint, type ReportChart, type ReportView } from "@/lib/report-view";
 
 const DEFAULT_COLOR = "#0f766e";
 const MAX_POINTS = 60;
@@ -138,15 +138,17 @@ function bindChart(chart: DraftChart, report: ConsolidatedReport): ReportChart |
   const kind = chart.kind === "column" ? "column" : "bar";
   const metric = chart.metric || "";
   if (metric === "averages") {
-    const points = report.movements.map((movement) => ({
-      label: movement.name,
-      value: round(movement.avgDurationSeconds),
-    }));
-    return points.length ? spec(chart.title || "Tempo médio por movimento", "Cada barra usa a média medida no relatório.", kind, color, points) : null;
+    const points = report.movements
+      .filter((movement) => movement.name.trim().toLowerCase() !== "ciclo completo")
+      .map((movement) => ({
+        label: chartLabel(movement),
+        value: round(movement.avgDurationSeconds),
+      }));
+    return points.length ? spec(chart.title || "Tempo médio por elemento e posto", "Cada barra usa a média medida no relatório.", kind, color, points) : null;
   }
   if (metric === "cycles") {
     const points = samplePoints(report, "ciclo completo");
-    return points.length ? spec(chart.title || "Duração de cada ciclo completo", "Cada barra é um ciclo completo medido, na ordem do vídeo.", kind, color, points) : null;
+    return points.length ? spec(chart.title || "Duração de cada ciclo completo", "Cada barra é um ciclo completo do primeiro posto, na ordem do vídeo.", kind, color, points) : null;
   }
   if (metric === "samples" && chart.movement) {
     const points = samplePoints(report, chart.movement);
@@ -159,20 +161,21 @@ function bindChart(chart: DraftChart, report: ConsolidatedReport): ReportChart |
 
 function pushAverages(charts: ReportChart[], view: ReportView, color: string) {
   if (!view.averages.length) return;
-  charts.push(spec("Tempo médio por movimento", "Cada barra usa a média medida no relatório.", "bar", color, view.averages));
+  charts.push(spec("Tempo médio por elemento e posto", "Cada barra usa a média medida no relatório.", "bar", color, view.averages));
 }
 
 function pushCycles(charts: ReportChart[], view: ReportView, color: string) {
-  if (view.cycles.length < 2) return;
-  charts.push(
-    spec(
-      "Duração de cada ciclo completo",
-      view.cycleNote || "Cada barra é um ciclo completo medido, na ordem do vídeo.",
-      "column",
-      color,
-      view.cycles,
-    ),
-  );
+  for (const station of view.stationCycles) {
+    charts.push(
+      spec(
+        `Duração de cada ciclo completo — ${station.station}`,
+        station.note || "Cada barra é um ciclo completo medido neste posto, na ordem do vídeo.",
+        "column",
+        color,
+        station.points,
+      ),
+    );
+  }
 }
 
 function pushSamples(charts: ReportChart[], report: ConsolidatedReport, name: string, color: string) {

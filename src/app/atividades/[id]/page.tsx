@@ -10,6 +10,7 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { formatBytes, formatDate } from "@/lib/format";
 import { QualitativeNotes } from "@/components/QualitativeNotes";
 import { StageMeasures } from "@/components/StageMeasures";
+import { StationStudy } from "@/components/StationStudy";
 import { toUserMessage } from "@/lib/errors";
 import { readSse } from "@/lib/read-sse";
 import { uploadWithProgress } from "@/lib/upload";
@@ -645,6 +646,7 @@ export default function ActivityDetailPage({
                 </div>
               </div>
 
+              <StationStudy videos={activity.analysis.videos} />
               <QualitativeNotes videos={activity.analysis.videos} />
               <StageMeasures videos={activity.analysis.videos} />
             </div>

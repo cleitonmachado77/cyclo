@@ -1,9 +1,11 @@
 import { formatSeconds } from "@/lib/format";
 import { buildQualitative, type QualitativeSection } from "@/lib/report-qualitative";
 import { measureText, stageHeading } from "@/lib/report-stages";
+import { STUDY_METHOD, buildStationViews, type StationView } from "@/lib/report-study";
 import { formatReportDate, reportFileBase, reportStatusLabel } from "@/lib/report-txt";
+import { UNASSIGNED_STATION, buildStationStudies, elementTypeOf } from "@/lib/time-study";
 import type { MovementTiming } from "@/types/activity";
-import type { ConsolidatedReport, RunStatus } from "@/types/pipeline";
+import type { ConsolidatedMovement, ConsolidatedReport, RunStatus } from "@/types/pipeline";
 
 export type ChartPoint = {
   label: string;
@@ -16,6 +18,12 @@ export type ReportChart = {
   kind: "bar" | "column";
   color: string;
   points: ChartPoint[];
+};
+
+export type StationCycles = {
+  station: string;
+  points: ChartPoint[];
+  note: string | null;
 };
 
 export type ReportView = {
@@ -36,8 +44,9 @@ export type ReportView = {
   kpis: Array<{ label: string; value: string }>;
   averages: ChartPoint[];
   averageDetails: string[];
-  cycles: ChartPoint[];
-  cycleNote: string | null;
+  stationCycles: StationCycles[];
+  stations: StationView[];
+  studyMethod: string;
   videos: Array<{
     stageTitle: string;
     fileName: string;
@@ -47,6 +56,10 @@ export type ReportView = {
       measure: number;
       line: string;
       name: string;
+      station: string;
+      elementType: string;
+      cycle: string;
+      operator: string;
       status: string;
       start: string;
       end: string;
@@ -57,7 +70,6 @@ export type ReportView = {
   failures: Array<{ fileName: string; error: string }>;
 };
 
-const CYCLE_NAME = "ciclo completo";
 const MAX_CYCLES = 60;
 
 export function buildReportView(input: {
@@ -68,11 +80,13 @@ export function buildReportView(input: {
   report: ConsolidatedReport;
 }): ReportView {
   const { report } = input;
-  const cycle = findMovement(report, CYCLE_NAME);
-  const idle = findMovement(report, "tempo ocioso");
-  const idleTotal = (idle?.samples || []).reduce((sum, sample) => sum + sample.durationSeconds, 0);
-  const cycleSamples = cycle?.samples || [];
-  const shown = cycleSamples.slice(0, MAX_CYCLES);
+  const studies = buildStationStudies(report.videos);
+  const leaves = report.movements.filter((movement) => !isRollupName(movement));
+  const sum = (values: number[]) => values.reduce((total, value) => total + value, 0);
+  const observed = sum(studies.map((study) => study.observedSeconds));
+  const waits = sum(studies.map((study) => study.waits.totalSeconds));
+  const foreign = sum(studies.map((study) => study.foreign.totalSeconds));
+  const noVision = sum(studies.map((study) => study.noVisionSeconds));
 
   return {
     fileBase: reportFileBase(input.title, report.generatedAt),
@@ -90,29 +104,24 @@ export function buildReportView(input: {
     includeDetail: true,
     charts: [],
     kpis: [
-      { label: "Ciclos completos", value: String(cycle?.sampleCount || 0) },
-      { label: "Média do ciclo", value: cycle ? formatSeconds(cycle.avgDurationSeconds) : "—" },
-      { label: "Ciclo mínimo", value: cycle ? formatSeconds(cycle.minDurationSeconds) : "—" },
-      { label: "Ciclo máximo", value: cycle ? formatSeconds(cycle.maxDurationSeconds) : "—" },
-      { label: "Tempo ocioso", value: idle ? formatSeconds(idleTotal) : "—" },
-      { label: "Ocorrências ociosas", value: idle ? String(idle.sampleCount) : "0" },
+      { label: "Postos separados", value: String(studies.filter((study) => study.station !== UNASSIGNED_STATION).length) },
+      { label: "Ciclos completos", value: String(sum(studies.map((study) => study.cycleCount))) },
+      { label: "Tempo observado", value: formatSeconds(observed) },
+      { label: "Esperas", value: `${formatSeconds(waits)} (${share(waits, observed)})` },
+      { label: "Elementos estranhos", value: `${formatSeconds(foreign)} (${share(foreign, observed)})` },
+      { label: "Sem visão do posto", value: formatSeconds(noVision) },
     ],
-    averages: report.movements.map((movement) => ({
-      label: movement.name,
+    averages: leaves.map((movement) => ({
+      label: chartLabel(movement),
       value: round(movement.avgDurationSeconds),
     })),
-    averageDetails: report.movements.map(
+    averageDetails: leaves.map(
       (movement) =>
         `n=${movement.sampleCount} · mín ${formatSeconds(movement.minDurationSeconds)} · máx ${formatSeconds(movement.maxDurationSeconds)}`,
     ),
-    cycles: shown.map((sample, index) => ({
-      label: String(index + 1),
-      value: round(sample.durationSeconds),
-    })),
-    cycleNote:
-      cycleSamples.length > shown.length
-        ? `Gráfico com os primeiros ${shown.length} de ${cycleSamples.length} ciclos completos.`
-        : null,
+    stationCycles: stationCycles(report),
+    stations: buildStationViews(studies),
+    studyMethod: STUDY_METHOD,
     videos: report.videos.map((video, stage) => ({
       stageTitle: stageHeading(stage + 1, video.fileName, video.totalDurationSeconds),
       fileName: video.fileName,
@@ -122,6 +131,10 @@ export function buildReportView(input: {
         measure: index + 1,
         line: measureText(movement),
         name: movement.name,
+        station: movement.station || UNASSIGNED_STATION,
+        elementType: elementTypeOf(movement),
+        cycle: movement.cycle ? String(movement.cycle) : "",
+        operator: movement.operator || "",
         status: movementStatus(movement.status),
         start: movement.startTime,
         end: movement.endTime,
@@ -136,8 +149,30 @@ export function buildReportView(input: {
   };
 }
 
-function findMovement(report: ConsolidatedReport, name: string) {
-  return report.movements.find((movement) => movement.name.trim().toLowerCase() === name);
+export function chartLabel(movement: Pick<ConsolidatedMovement, "name" | "station">) {
+  if (!movement.station || movement.station === UNASSIGNED_STATION) return movement.name;
+  return `${movement.station.replace(/^Posto\s+/i, "P")} · ${movement.name}`;
+}
+
+function stationCycles(report: ConsolidatedReport): StationCycles[] {
+  return report.movements
+    .filter((movement) => movement.name.trim().toLowerCase() === "ciclo completo" && movement.samples.length >= 2)
+    .map((movement) => {
+      const shown = movement.samples.slice(0, MAX_CYCLES);
+      return {
+        station: movement.station || UNASSIGNED_STATION,
+        points: shown.map((sample, index) => ({ label: String(index + 1), value: round(sample.durationSeconds) })),
+        note:
+          movement.samples.length > shown.length
+            ? `Gráfico com os primeiros ${shown.length} de ${movement.samples.length} ciclos.`
+            : null,
+      };
+    });
+}
+
+function isRollupName(movement: ConsolidatedMovement) {
+  const key = movement.name.trim().toLowerCase();
+  return key === "ciclo completo" || key === "esteira de processo";
 }
 
 function movementStatus(status?: MovementTiming["status"]) {
@@ -147,6 +182,11 @@ function movementStatus(status?: MovementTiming["status"]) {
   return "—";
 }
 
+function share(part: number, total: number) {
+  if (!total) return "0,0%";
+  return `${((part / total) * 100).toFixed(1).replace(".", ",")}%`;
+}
+
 function round(value: number) {
-  return Math.round(value * 10) / 10;
+  return Math.round(value * 100) / 100;
 }

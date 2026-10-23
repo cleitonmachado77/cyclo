@@ -14,6 +14,7 @@ import { renderChart, type ChartImage } from "@/lib/report-chart";
 import { tintColor } from "@/lib/report-layout";
 import { qualitativeIsEmpty } from "@/lib/report-qualitative";
 import { STAGE_SECTION } from "@/lib/report-stages";
+import { STUDY_SECTION, readingLine, stationHeading, type StationView } from "@/lib/report-study";
 import type { ReportChart, ReportView } from "@/lib/report-view";
 
 export async function renderReportDocx(view: ReportView) {
@@ -34,6 +35,7 @@ export async function renderReportDocx(view: ReportView) {
     ...qualitativeBlock(view, accent),
     ...(view.warning ? [text(`Aviso: ${view.warning}`, "9A3412")] : []),
     ...(view.includeKpis ? [heading("Indicadores", HeadingLevel.HEADING_2, accent), kpiTable(view, accent)] : []),
+    ...stationBlocks(view, accent),
     ...charts.flatMap((item) => chartBlock(item.image, item.chart.title, item.chart.caption, accent)),
     ...(view.includeDetail && view.videos.length ? stageBlocks(view, accent) : []),
     ...failureBlock(view),
@@ -60,6 +62,68 @@ function qualitativeBlock(view: ReportView, accent: string) {
 function qualitativeGroup(title: string, items: string[]) {
   if (!items.length) return [];
   return [text(title, "0F172A"), ...items.map((item) => text(`• ${item}`))];
+}
+
+function stationBlocks(view: ReportView, accent: string) {
+  if (!view.stations.length) return [];
+  return [
+    heading(STUDY_SECTION, HeadingLevel.HEADING_2, accent),
+    text(view.studyMethod, "64748B"),
+    ...view.stations.flatMap((station) => stationBlock(station, accent)),
+  ];
+}
+
+function stationBlock(station: StationView, accent: string) {
+  const blocks: Array<Paragraph | Table> = [
+    heading(stationHeading(station), HeadingLevel.HEADING_3, accent),
+    ...station.indicators.map((item) => text(`${item.label}: ${item.value}`)),
+    ...station.warnings.map((warning) => text(`Atenção: ${warning}`, "9A3412")),
+  ];
+  if (station.elements.length) {
+    blocks.push(
+      text("Elementos", "0F172A"),
+      dataTable(
+        ["Elemento", "Tipo", "Média", "Desvio", "Erro 95%", "n necessário", "Ocorr.", "Frequência", "Por ocorrência"],
+        station.elements.map((row) => [
+          row.name,
+          row.type,
+          row.mean,
+          row.stdDev,
+          row.error,
+          row.required,
+          row.occurrences,
+          row.frequency,
+          row.perOccurrence,
+        ]),
+        accent,
+      ),
+    );
+  }
+  if (station.casuals.length) {
+    blocks.push(text("Elementos casuais", "0F172A"), ...station.casuals.map((line) => text(`• ${line}`)));
+  }
+  if (station.readings.labels.length) {
+    blocks.push(
+      text("Leituras por ciclo (s; 0 = não ocorreu)", "0F172A"),
+      ...station.readings.rows.map((row) => text(`• ${readingLine(station.readings.labels, row)}`)),
+    );
+  }
+  return blocks;
+}
+
+function dataTable(headers: string[], rows: string[][], accent: string) {
+  const cell = (value: string, header = false) =>
+    new TableCell({
+      shading: header ? { fill: tintColor(`#${accent}`).replace("#", "") } : undefined,
+      children: [new Paragraph({ children: [run(value, { bold: header, size: 16 })] })],
+    });
+  return new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    rows: [
+      new TableRow({ tableHeader: true, children: headers.map((header) => cell(header, true)) }),
+      ...rows.map((row) => new TableRow({ children: row.map((value) => cell(value)) })),
+    ],
+  });
 }
 
 function stageBlocks(view: ReportView, accent: string) {

@@ -22,14 +22,14 @@ function barSvg(title: string, items: ReportChart["points"], color: string) {
   const row = 42;
   const height = 64 + items.length * row;
   const max = Math.max(...items.map((item) => item.value), 0.1);
-  const labelWidth = 250;
+  const labelWidth = 330;
   const plot = WIDTH - labelWidth - 110;
   const bars = items
     .map((item, index) => {
       const y = 52 + index * row;
       const width = Math.max(4, (plot * item.value) / max);
       return `
-        <text x="16" y="${y + 16}" font-size="16" font-family="Arial, sans-serif" fill="#1f2933">${escapeXml(trim(item.label, 28))}</text>
+        <text x="16" y="${y + 16}" font-size="16" font-family="Arial, sans-serif" fill="#1f2933">${escapeXml(trim(item.label, 38))}</text>
         <rect x="${labelWidth}" y="${y}" width="${width}" height="22" rx="4" fill="${color}"/>
         <text x="${labelWidth + width + 8}" y="${y + 16}" font-size="15" font-family="Arial, sans-serif" fill="#334155">${formatValue(item.value)}</text>
       `;
@@ -73,7 +73,7 @@ function frame(title: string, body: string, height: number) {
 }
 
 function formatValue(value: number) {
-  return `${value.toFixed(1).replace(".", ",")} s`;
+  return `${value.toFixed(2).replace(".", ",")} s`;
 }
 
 function trim(value: string, max: number) {

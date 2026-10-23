@@ -13,9 +13,9 @@ export function formatDate(value: string) {
 
 export function formatSeconds(value: number) {
   if (!Number.isFinite(value)) return "—";
-  const total = Math.max(0, value);
+  const total = Math.round(Math.max(0, value) * 100) / 100;
   const minutes = Math.floor(total / 60);
-  const seconds = total % 60;
-  if (minutes === 0) return `${seconds.toFixed(1)}s`;
-  return `${minutes}m ${seconds.toFixed(1)}s`;
+  const seconds = total - minutes * 60;
+  if (minutes === 0) return `${seconds.toFixed(2)}s`;
+  return `${minutes}m ${seconds.toFixed(2)}s`;
 }
